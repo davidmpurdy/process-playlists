@@ -5,8 +5,6 @@ from collections import Counter
 import datetime
 import time
 
-title_artist_cell = 2       # the zero-based index of the cell in the EVT file that holds the track title and artist name
-
 ###
 # Log errors/status messages 
 ###
@@ -43,6 +41,20 @@ def find_end_of_spaces (cell):
 
 
 ###
+# Extract fields we need from a line of the EVT file
+###
+def split_line (line):
+    field_regex = r"([\w]{3})\|([\d:]+)\|(.*?)\|([\d:]+)"
+    field_matches = re.match(field_regex, line)
+
+    parsed_line = {
+        "start_time":   field_matches.group(2),
+        "title_artist": field_matches.group(3),
+        "duration":     field_matches.group(4)
+    }
+    return parsed_line
+
+###
 # Main function - process an input EVT file and save it as properly-formatted CSV
 ###
 def process_file (source_file):
@@ -56,19 +68,26 @@ def process_file (source_file):
 
     # Open the source file to read as a CSV (with custom delimiter)
     with open(source_file, "r", encoding="latin-1", newline='') as source:
-        reader = csv.reader(source, delimiter='|')
 
         ## Load the lines into a list
         evt = []
-        for line in reader:
+        while True:
+            
+            # read the full line
+            raw_line = source.readline()
+
+            if not raw_line:
+                break
+
+            # get the fields from the line
+            line = split_line(raw_line)
             evt.append(line)
 
-        log (len(evt))
 
         ## Make a list of the cutoff points for separating track from artist (approximated by the end of the longest string of spaces - not precise but we'll use the most common cutoff in the next step to cover over individual anomalies)
         cutoffs = []
         for line in evt:
-            cutoffs.append(find_end_of_spaces(line[title_artist_cell].strip()))
+            cutoffs.append(find_end_of_spaces(line["title_artist"].strip()))
 
         ## Use the most common cutoff  (i.e., where most cells end their longest string of spaces)
         occurence_count = Counter(cutoffs)
@@ -80,10 +99,10 @@ def process_file (source_file):
         simple_cutoff_time = schedule_date
         for line in reversed(evt):
 
-            log (line)
+            #log (line)
 
             # parse the title/author cell to find the "GTL Simple" time code
-            simple_update = re.findall(r"^[\s]*(([\d]+[^\s\d\w]?){3})[\s]+GTL Simple", line[title_artist_cell])
+            simple_update = re.findall(r"^[\s]*(([\d]+[^\s\d\w]?){3})[\s]+GTL Simple", line["title_artist"])
 
             # If this is a "Simple update" row, update the cutoff time (which will be set for all previous rows since we're going through the rows in reverse)
             if len (simple_update) > 0:
@@ -101,7 +120,7 @@ def process_file (source_file):
                 simple_cutoff_time = datetime.datetime.combine(simple_cutoff_time, cutoff_time)
 
             # this line's cutoff time is whatever the most recent one we found (when going in reverse: i.e., the time for the NEXT "Simple Update" row, which we don't want to go past)
-            line.append (simple_cutoff_time)
+            line["cutoff_time"] = simple_cutoff_time
 
 
         ## Write out the info we want to the destination file
@@ -120,27 +139,27 @@ def process_file (source_file):
             for line in evt:
 
                 # temporary string of the full cell to work with while we split it up
-                title_artist = line[title_artist_cell]
+                title_artist = line["title_artist"]
 
                 # change the original cell to just the song title
                 song_title = title_artist[0:common_cutoff].strip()
-                line[title_artist_cell] = song_title
+                line["title"] = song_title
 
                 # insert another cell right after it for the artist name
                 artist_name = title_artist[common_cutoff:len(title_artist)].strip()
-                line.insert (title_artist_cell+1, artist_name)
+                line["artist"] = artist_name
 
                 # set the start time of THIS row to the end time of the PREVIOUS row
                 start_time = end_time
 
                 ## Should we skip this row? (we should if we're past the cutoff time of the next "Simple Update")
-                cutoff_time = line[len(line) - 1]       # the cutoff time should be in the last cell of the line, since we appended it earlier when finding "Simple Update" times
+                cutoff_time = line["cutoff_time"]       # the cutoff time should be in the last cell of the line, since we appended it earlier when finding "Simple Update" times
                 if start_time > cutoff_time and not song_title.lower().strip().endswith("gtl simple"):
                     continue
 
 
                 # calculate the end time for this row by ADDING the length of the track
-                track_time = datetime.datetime.strptime(line[title_artist_cell+2],"%H:%M:%S")
+                track_time = datetime.datetime.strptime(line["duration"],"%H:%M:%S")
                 delta = datetime.timedelta (hours=track_time.hour, minutes=track_time.minute, seconds=track_time.second)
                 end_time = start_time + delta
 
@@ -152,4 +171,4 @@ def process_file (source_file):
 
 
                 # write the row
-                out.writerow(line[title_artist_cell:title_artist_cell+3] + [start_time_str, end_time_str])
+                out.writerow([line["title"], line["artist"], start_time_str, end_time_str])
