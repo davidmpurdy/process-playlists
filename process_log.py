@@ -171,4 +171,4 @@ def process_file (source_file):
 
 
                 # write the row
-                out.writerow([line["title"], line["artist"], start_time_str, end_time_str])
+                out.writerow([line["title"], line["artist"], line["duration"], start_time_str, end_time_str])
